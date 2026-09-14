@@ -1,1 +1,4 @@
 /image.jpeg
+node_modules/
+.env
+.env.*

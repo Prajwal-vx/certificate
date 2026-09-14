@@ -104,6 +104,7 @@
   const smtpUser        = document.getElementById('smtpUser');
   const smtpPass        = document.getElementById('smtpPass');
   const smtpFromName    = document.getElementById('smtpFromName');
+  const smtpAllowInvalidTls = document.getElementById('smtpAllowInvalidTls');
   const btnSaveSmtp     = document.getElementById('btnSaveSmtp');
   const btnTestSmtp     = document.getElementById('btnTestSmtp');
   const smtpTestResult  = document.getElementById('smtpTestResult');
@@ -219,16 +220,32 @@
   });
 
   // ── Helpers ────────────────────────────────────────────────────────
+  function normalizeHex(hex) {
+    if (!hex || typeof hex !== 'string') return null;
+    const h = hex.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(h)) return h.toLowerCase();
+    if (/^#[0-9a-fA-F]{3}$/.test(h)) {
+      return `#${h[1]}${h[1]}${h[2]}${h[2]}${h[3]}${h[3]}`.toLowerCase();
+    }
+    return null;
+  }
+
   function hexToRgba(hex, opacity) {
-    if (!hex || hex.length < 7) return `rgba(0,0,0,${opacity / 100})`;
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r},${g},${b},${opacity / 100})`;
+    const normalized = normalizeHex(hex) || '#000000';
+    const r = parseInt(normalized.slice(1, 3), 16);
+    const g = parseInt(normalized.slice(3, 5), 16);
+    const b = parseInt(normalized.slice(5, 7), 16);
+    const op = Math.max(0, Math.min(100, Number(opacity) || 60));
+    return `rgba(${r},${g},${b},${op / 100})`;
   }
 
   function esc(str) {
-    return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function toast(msg, type = '') {
@@ -448,7 +465,11 @@
 
   function applyTextTransform(value, transform) {
     if (transform === 'uppercase') return String(value).toUpperCase();
-    if (transform === 'titlecase') return String(value).charAt(0).toUpperCase() + String(value).slice(1).toLowerCase();
+    if (transform === 'titlecase') {
+      return String(value)
+        .toLowerCase()
+        .replace(/(?:^|\s|-|[('"])\S/g, c => c.toUpperCase());
+    }
     return String(value);
   }
 
@@ -591,10 +612,16 @@
 
         if (!rows.length) { toast('No data found in the file', 'warning'); return; }
 
+        const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
         const normalise = obj => {
-          const result = {};
-          for (const k of Object.keys(obj)) result[k.toLowerCase().trim()] = String(obj[k]).trim();
-          return result;
+          const result = Object.create(null);
+          for (const k of Object.keys(obj)) {
+            const cleanKey = k.toLowerCase().trim();
+            if (!BLOCKED_KEYS.has(cleanKey)) {
+              result[cleanKey] = String(obj[k] ?? '').trim();
+            }
+          }
+          return { ...result };
         };
 
         const parsed = rows.map(normalise);
@@ -793,6 +820,14 @@
     canvas.addEventListener('drop', e => {
       e.preventDefault();
       canvas.classList.remove('drop-over');
+
+      // Check if an image file was dropped
+      const imageFile = [...(e.dataTransfer.files || [])].find(f => f.type && f.type.startsWith('image/'));
+      if (imageFile) {
+        loadCertificateImage(imageFile);
+        return;
+      }
+
       const key = e.dataTransfer.getData('text/plain');
       if (!key || !state.excelColumns.includes(key)) return;
 
@@ -968,8 +1003,9 @@
   if (fontColor) fontColor.addEventListener('input', () => { if (fontColorHex) fontColorHex.value = fontColor.value; onTypographyChange(); });
   if (fontColorHex) {
     fontColorHex.addEventListener('input', () => {
-      if (/^#[0-9a-fA-F]{6}$/.test(fontColorHex.value)) { 
-        if (fontColor) fontColor.value = fontColorHex.value; 
+      const norm = normalizeHex(fontColorHex.value);
+      if (norm) { 
+        if (fontColor) fontColor.value = norm; 
         onTypographyChange(); 
       }
     });
@@ -985,8 +1021,9 @@
   if (shadowColor) shadowColor.addEventListener('input', () => { if (shadowColorHex) shadowColorHex.value = shadowColor.value; onTypographyChange(); });
   if (shadowColorHex) {
     shadowColorHex.addEventListener('input', () => {
-      if (/^#[0-9a-fA-F]{6}$/.test(shadowColorHex.value)) { 
-        if (shadowColor) shadowColor.value = shadowColorHex.value; 
+      const norm = normalizeHex(shadowColorHex.value);
+      if (norm) { 
+        if (shadowColor) shadowColor.value = norm; 
         onTypographyChange(); 
       }
     });
@@ -1059,6 +1096,12 @@
     });
   });
 
+  function isSafeUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const trimmed = url.trim().toLowerCase();
+    return trimmed.startsWith('https://') || trimmed.startsWith('http://') || trimmed.startsWith('mailto:');
+  }
+
   const btnInsertLink = document.getElementById('btnInsertLink');
   if (btnInsertLink) {
     btnInsertLink.addEventListener('mousedown', e => {
@@ -1066,19 +1109,24 @@
       if (emailBody) emailBody.focus();
       const sel = window.getSelection();
       const selectedText = sel && sel.toString().trim();
-      const url = prompt('Enter URL:', 'https://');
-      if (!url || url === 'https://') return;
+      const rawUrl = prompt('Enter URL (https://, http://, or mailto:):', 'https://');
+      if (!rawUrl || rawUrl.trim() === 'https://') return;
+      const cleanUrl = rawUrl.trim();
+      if (!isSafeUrl(cleanUrl)) {
+        toast('Invalid URL scheme. Only https://, http://, and mailto: are allowed.', 'warning');
+        return;
+      }
       if (selectedText) {
-        document.execCommand('createLink', false, url);
+        document.execCommand('createLink', false, cleanUrl);
         if (emailBody) {
           emailBody.querySelectorAll('a').forEach(a => {
-            if (a.href === url || a.getAttribute('href') === url) a.setAttribute('target', '_blank');
+            if (a.href === cleanUrl || a.getAttribute('href') === cleanUrl) a.setAttribute('target', '_blank');
           });
         }
       } else {
-        const label = prompt('Link text:', url);
+        const label = prompt('Link text:', cleanUrl);
         if (!label) return;
-        document.execCommand('insertHTML', false, `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`);
+        document.execCommand('insertHTML', false, `<a href="${esc(cleanUrl)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`);
       }
       saveDraft();
     });
@@ -1149,16 +1197,20 @@
       if (saved.port && smtpPort)         smtpPort.value     = saved.port;
       if (saved.user && smtpUser)         smtpUser.value     = saved.user;
       if (saved.fromName && smtpFromName) smtpFromName.value = saved.fromName;
+      if (smtpAllowInvalidTls && typeof saved.allowInvalidTls === 'boolean') {
+        smtpAllowInvalidTls.checked = saved.allowInvalidTls;
+      }
       updateSmtpBadge(!!saved.host && !!saved.user);
     } catch (_) {}
   }
 
   function saveSmtpToStorage() {
     const cfg = {
-      host:     smtpHost ? smtpHost.value.trim() : '',
-      port:     smtpPort ? smtpPort.value : 587,
-      user:     smtpUser ? smtpUser.value.trim() : '',
-      fromName: smtpFromName ? smtpFromName.value.trim() : '',
+      host:            smtpHost ? smtpHost.value.trim() : '',
+      port:            smtpPort ? smtpPort.value : 587,
+      user:            smtpUser ? smtpUser.value.trim() : '',
+      fromName:        smtpFromName ? smtpFromName.value.trim() : '',
+      allowInvalidTls: smtpAllowInvalidTls ? smtpAllowInvalidTls.checked : false,
     };
     localStorage.setItem('certgen_smtp', JSON.stringify(cfg));
     updateSmtpBadge(!!cfg.host && !!cfg.user);
@@ -1218,11 +1270,12 @@
 
   function getSmtpConfig() {
     return {
-      host:     smtpHost ? smtpHost.value.trim() : '',
-      port:     smtpPort ? (parseInt(smtpPort.value, 10) || 587) : 587,
-      user:     smtpUser ? smtpUser.value.trim() : '',
-      pass:     smtpPass ? smtpPass.value : '',
-      fromName: smtpFromName ? smtpFromName.value.trim() : '',
+      host:            smtpHost ? smtpHost.value.trim() : '',
+      port:            smtpPort ? (parseInt(smtpPort.value, 10) || 587) : 587,
+      user:            smtpUser ? smtpUser.value.trim() : '',
+      pass:            smtpPass ? smtpPass.value : '',
+      fromName:        smtpFromName ? smtpFromName.value.trim() : '',
+      allowInvalidTls: smtpAllowInvalidTls ? smtpAllowInvalidTls.checked : false,
     };
   }
 
@@ -1572,6 +1625,221 @@
   if (changeTemplateBtn && certFileInput) {
     changeTemplateBtn.addEventListener('click', () => certFileInput.click());
   }
+
+  // Prevent browser from navigating to dropped file when dropped outside valid targets
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => e.preventDefault());
+
+  // ── Landing Page Controller & View Management ──────────────────────
+  const landingView       = document.getElementById('landingView');
+  const studioView        = document.getElementById('studioView');
+  const btnToggleStudio   = document.getElementById('btnToggleStudio');
+  const studioToggleText  = document.getElementById('studioToggleText');
+  const navBrand          = document.getElementById('navBrand');
+  const btnQuickDemo      = document.getElementById('btnQuickDemo');
+  const btnHeroLaunch     = document.getElementById('btnHeroLaunch');
+  const btnHeroDemo       = document.getElementById('btnHeroDemo');
+  const btnEditSample     = document.getElementById('btnEditSample');
+  const btnCtaLaunch      = document.getElementById('btnCtaLaunch');
+  const btnCtaDemo        = document.getElementById('btnCtaDemo');
+  const liveHeroName      = document.getElementById('liveHeroName');
+
+  function isStudioActive() {
+    return document.body.classList.contains('studio-active');
+  }
+
+  function showStudioView() {
+    document.body.classList.add('studio-active');
+    document.body.classList.remove('landing-active');
+    if (studioToggleText) studioToggleText.textContent = '← Back to Home';
+    if (state.image) {
+      autoFitZoom();
+      render();
+    }
+  }
+
+  function showLandingView() {
+    document.body.classList.add('landing-active');
+    document.body.classList.remove('studio-active');
+    if (studioToggleText) studioToggleText.textContent = 'Open Studio';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function toggleView() {
+    if (isStudioActive()) {
+      showLandingView();
+    } else {
+      showStudioView();
+    }
+  }
+
+  if (btnToggleStudio) btnToggleStudio.addEventListener('click', toggleView);
+  if (navBrand) navBrand.addEventListener('click', () => {
+    if (isStudioActive()) showLandingView();
+  });
+  if (btnHeroLaunch) btnHeroLaunch.addEventListener('click', showStudioView);
+  if (btnCtaLaunch)  btnCtaLaunch.addEventListener('click', showStudioView);
+
+  // ── One-Click Sample Demo Loader ───────────────────────────────────
+  async function loadSampleDemo() {
+    try {
+      showStudioView();
+      toast('Loading sample certificate template…', 'info');
+
+      // 1. Fetch bundled image.jpeg
+      const res = await fetch('image.jpeg');
+      if (!res.ok) throw new Error('Could not load sample template image.');
+      const blob = await res.blob();
+      const file = new File([blob], 'certificate_template.jpeg', { type: 'image/jpeg' });
+
+      // 2. Load certificate template image into canvas
+      loadCertificateImage(file);
+
+      // 3. Pre-load sample recipient data
+      const sampleRecipients = [
+        {
+          name: 'Dr. Sophia Lin',
+          email: 'sophia.lin@example.com',
+          course: 'Advanced Agentic Intelligence',
+          date: 'September 2026',
+          grade: 'High Distinction',
+        },
+        {
+          name: 'Alexander Sterling',
+          email: 'alex.sterling@example.com',
+          course: 'Advanced Agentic Intelligence',
+          date: 'September 2026',
+          grade: 'Honors',
+        },
+        {
+          name: 'Elena Rostova',
+          email: 'elena.rostova@example.com',
+          course: 'Advanced Agentic Intelligence',
+          date: 'September 2026',
+          grade: 'Excellence',
+        },
+        {
+          name: 'Marcus Vance',
+          email: 'marcus.vance@example.com',
+          course: 'Advanced Agentic Intelligence',
+          date: 'September 2026',
+          grade: 'Distinction',
+        }
+      ];
+
+      const allKeys = ['name', 'course', 'date', 'email', 'grade'];
+      state.excelColumns = allKeys;
+      state.excelData = sampleRecipients;
+      state.previewRowIdx = 0;
+      state.editingRowIdx = -1;
+      state.rowOverrides = {};
+
+      // 4. Place initial name field in center if no fields placed yet
+      if (state.fields.length === 0) {
+        state.fields.push({
+          key: 'name',
+          x: 0.5,
+          y: 0.51,
+          font: "'Great Vibes', cursive",
+          size: 72,
+          color: '#2c1a0e',
+          bold: false,
+          italic: false,
+          align: 'center',
+          textTransform: 'titlecase',
+          shadowEnabled: false,
+          shadowColor: '#000000',
+          shadowBlur: 0,
+          shadowOffsetX: 0,
+          shadowOffsetY: 0,
+          shadowOpacity: 60,
+          _bbox: null,
+        });
+        selectField(0);
+      }
+
+      buildVarChips();
+      buildColumnChips(allKeys);
+      renderExcelPreview();
+      updateBulkBtn();
+      updateSendBtn();
+      updateRowIndicator();
+
+      toast('✨ Sample template & 4 demo recipients loaded!', 'success');
+    } catch (err) {
+      console.error('Demo load error:', err);
+      toast('Demo template ready — drop your template or spreadsheet anytime', 'warning');
+    }
+  }
+
+  [btnQuickDemo, btnHeroDemo, btnEditSample, btnCtaDemo].forEach(btn => {
+    if (btn) btn.addEventListener('click', loadSampleDemo);
+  });
+
+  // ── Animated Showcase Live Name Switcher ───────────────────────────
+  if (liveHeroName) {
+    const demoNames = [
+      'Dr. Sophia Lin',
+      'Alexander Sterling',
+      'Elena Rostova',
+      'Marcus Vance',
+      'Priya Sharma',
+      'Jean-Luc Picard'
+    ];
+    let nameIdx = 0;
+    setInterval(() => {
+      liveHeroName.style.opacity = '0';
+      liveHeroName.style.transform = 'translateY(-6px)';
+      setTimeout(() => {
+        nameIdx = (nameIdx + 1) % demoNames.length;
+        liveHeroName.textContent = demoNames[nameIdx];
+        liveHeroName.style.opacity = '1';
+        liveHeroName.style.transform = 'translateY(0)';
+      }, 250);
+    }, 3000);
+  }
+
+  // ── Interactive FAQ Accordion ──────────────────────────────────────
+  document.querySelectorAll('.faq-question').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = btn.closest('.faq-item');
+      if (item) {
+        const isOpen = item.classList.contains('open');
+        document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
+        if (!isOpen) item.classList.add('open');
+      }
+    });
+  });
+
+  // ── Smooth Scroll Navigation for Landing Page Links ────────────────
+  document.querySelectorAll('a.nav-link[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function(e) {
+      const targetId = this.getAttribute('href');
+      if (targetId && targetId !== '#') {
+        const targetEl = document.querySelector(targetId);
+        if (targetEl) {
+          e.preventDefault();
+          if (isStudioActive()) showLandingView();
+          targetEl.scrollIntoView({ behavior: 'smooth' });
+        }
+      }
+    });
+  });
+
+  // Drag-and-drop auto-detection on landing page
+  window.addEventListener('drop', e => {
+    const files = e.dataTransfer ? e.dataTransfer.files : null;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.type && file.type.startsWith('image/')) {
+        showStudioView();
+        loadCertificateImage(file);
+      } else if (file.name && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv'))) {
+        showStudioView();
+        parseExcelFile(file);
+      }
+    }
+  });
 
   // ── Init ───────────────────────────────────────────────────────────
   if (fontTriggerLabel) fontTriggerLabel.style.fontFamily = state.committedFont;
