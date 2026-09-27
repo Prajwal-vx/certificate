@@ -1681,16 +1681,65 @@
   if (btnCtaLaunch)  btnCtaLaunch.addEventListener('click', showStudioView);
 
   // ── One-Click Sample Demo Loader ───────────────────────────────────
+  function createSampleCertificateFile() {
+    return new Promise((resolve, reject) => {
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = 1600;
+      sampleCanvas.height = 1000;
+      const sampleCtx = sampleCanvas.getContext('2d');
+      if (!sampleCtx) {
+        reject(new Error('Canvas is not available in this browser.'));
+        return;
+      }
+
+      const background = sampleCtx.createLinearGradient(0, 0, 1600, 1000);
+      background.addColorStop(0, '#15172b');
+      background.addColorStop(0.5, '#242044');
+      background.addColorStop(1, '#101b32');
+      sampleCtx.fillStyle = background;
+      sampleCtx.fillRect(0, 0, 1600, 1000);
+
+      sampleCtx.strokeStyle = '#d4af37';
+      sampleCtx.lineWidth = 8;
+      sampleCtx.strokeRect(48, 48, 1504, 904);
+      sampleCtx.lineWidth = 2;
+      sampleCtx.strokeStyle = 'rgba(255, 224, 102, 0.6)';
+      sampleCtx.strokeRect(68, 68, 1464, 864);
+
+      sampleCtx.textAlign = 'center';
+      sampleCtx.fillStyle = '#f8fafc';
+      sampleCtx.font = '700 58px Cinzel, Georgia, serif';
+      sampleCtx.fillText('CERTIFICATE OF ACHIEVEMENT', 800, 240);
+      sampleCtx.fillStyle = '#d4af37';
+      sampleCtx.font = '600 22px Inter, sans-serif';
+      sampleCtx.fillText('EXCELLENCE IN SYSTEM ARCHITECTURE', 800, 292);
+      sampleCtx.fillStyle = '#cbd5e1';
+      sampleCtx.font = '22px Inter, sans-serif';
+      sampleCtx.fillText('This honor is proudly conferred upon', 800, 420);
+      sampleCtx.fillStyle = '#ffd700';
+      sampleCtx.font = '400 92px Great Vibes, cursive';
+      sampleCtx.fillText('Dr. Sophia Lin', 800, 560);
+      sampleCtx.fillStyle = '#cbd5e1';
+      sampleCtx.font = '20px Inter, sans-serif';
+      sampleCtx.fillText('For demonstrating exceptional leadership and technical mastery.', 800, 650);
+      sampleCtx.fillStyle = '#94a3b8';
+      sampleCtx.font = '18px Inter, sans-serif';
+      sampleCtx.fillText('Program Director                                      Academic Board Chair', 800, 820);
+
+      sampleCanvas.toBlob(blob => {
+        if (blob) resolve(new File([blob], 'certificate_template.png', { type: 'image/png' }));
+        else reject(new Error('Could not create the sample certificate.'));
+      }, 'image/png');
+    });
+  }
+
   async function loadSampleDemo() {
     try {
       showStudioView();
       toast('Loading sample certificate template…', 'info');
 
-      // 1. Fetch bundled image.jpeg
-      const res = await fetch('image.jpeg');
-      if (!res.ok) throw new Error('Could not load sample template image.');
-      const blob = await res.blob();
-      const file = new File([blob], 'certificate_template.jpeg', { type: 'image/jpeg' });
+      // Keep the demo self-contained so it works even when no template asset is present.
+      const file = await createSampleCertificateFile();
 
       // 2. Load certificate template image into canvas
       loadCertificateImage(file);
@@ -1810,6 +1859,29 @@
       }
     });
   });
+
+  // ── Scroll reveal animation ───────────────────────────────────────
+  const revealTargets = document.querySelectorAll(
+    '.stats-grid, .workflow-card, .bento-card, .security-box, .sec-item, .faq-item, .cta-banner'
+  );
+  revealTargets.forEach((target, index) => {
+    target.classList.add('reveal-on-scroll');
+    target.style.transitionDelay = `${Math.min(index % 4, 3) * 80}ms`;
+  });
+
+  if ('IntersectionObserver' in window) {
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px' });
+    revealTargets.forEach(target => revealObserver.observe(target));
+  } else {
+    revealTargets.forEach(target => target.classList.add('is-visible'));
+  }
 
   // ── Smooth Scroll Navigation for Landing Page Links ────────────────
   document.querySelectorAll('a.nav-link[href^="#"]').forEach(anchor => {

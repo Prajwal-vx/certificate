@@ -19,18 +19,22 @@
   --sidebar-width: 340px;
 }
 
-html, body {
-  height: 100%;
-  overflow: hidden;
+html {
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 body {
   font-family: 'Inter', 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text);
-  height: 100vh;
+  min-height: 100vh;
+  height: auto;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 /* ─── Header ─────────────────────────────────── */
@@ -63,6 +67,7 @@ header span { font-size: 12px; color: var(--text-muted); margin-left: 2px; }
   flex: 1;
   overflow: hidden;
   height: calc(100vh - 57px);
+  min-height: 0;
 }
 
 /* ─── Sidebar ─────────────────────────────────── */
@@ -1472,6 +1477,33 @@ body.studio-active #studioView {
   background: #090a0f;
   color: var(--text);
   overflow-x: hidden;
+}
+
+/* Sections reveal as they enter the viewport. The class is opt-in so the
+   page remains readable if JavaScript is unavailable. */
+.reveal-on-scroll {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+
+.reveal-on-scroll.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .reveal-on-scroll {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* Ambient Aurora Background */
