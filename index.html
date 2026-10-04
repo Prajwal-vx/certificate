@@ -688,7 +688,7 @@
         </div>
         <div class="cert-drop-title">Drop your certificate here</div>
         <div class="cert-drop-sub">Drag &amp; drop or click to browse</div>
-        <div class="cert-drop-formats">PNG &nbsp;·&nbsp; JPG &nbsp;·&nbsp; WebP</div>
+        <div class="cert-drop-formats">PNG &nbsp;·&nbsp; JPG &nbsp;·&nbsp; WebP &nbsp;·&nbsp; GIF</div>
       </div>
     </div>
 
@@ -765,15 +765,6 @@
         <label>From Name (display name)</label>
         <input type="text" id="smtpFromName" placeholder="e.g. Certificate Team" autocomplete="off" />
       </div>
-      <div class="field" style="margin-top:6px">
-        <label class="switch-row" style="cursor:pointer;align-items:center">
-          <div class="switch-track">
-            <input type="checkbox" id="smtpAllowInvalidTls" />
-            <span class="switch-thumb"></span>
-          </div>
-          <span style="font-size:12px;color:var(--text-muted)">Allow self-signed / unverified TLS certificate (not recommended)</span>
-        </label>
-      </div>
       <div id="smtpTestResult" class="smtp-test-result" style="display:none"></div>
     </div>
     <div class="modal-footer">
@@ -841,8 +832,8 @@
 </div>
 
 <!-- Libraries -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
 <script src="app.js"></script>
 </body>
 </html>

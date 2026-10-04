@@ -2,9 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const path = require('path');
+const dns = require('dns').promises;
+const net = require('net');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
+const HOST = '127.0.0.1';
 
 // Security headers middleware
 app.use((req, res, next) => {
@@ -15,37 +18,47 @@ app.use((req, res, next) => {
   next();
 });
 
-// Restrict CORS to trusted local origins and configured origins
-const allowedPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+function isAllowedOrigin(origin) {
+  if (process.env.ALLOWED_ORIGIN && origin === process.env.ALLOWED_ORIGIN) return true;
+  try {
+    const parsed = new URL(origin);
+    const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    return ['http:', 'https:'].includes(parsed.protocol)
+      && ['localhost', '127.0.0.1'].includes(parsed.hostname)
+      && port === PORT;
+  } catch (_) {
+    return false;
+  }
+}
+
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  if (origin && !isAllowedOrigin(origin)) {
+    return res.status(403).json({ ok: false, error: 'Origin not allowed.' });
+  }
+  next();
+});
+
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    if (allowedPattern.test(origin) || (process.env.ALLOWED_ORIGIN && origin === process.env.ALLOWED_ORIGIN)) {
+    if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
-    return callback(new Error('Blocked by CORS policy: Origin not allowed.'));
+    return callback(null, false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
 
-app.use(express.json({ limit: '25mb' }));
-
-// Serve static frontend files from workspace root
-app.use(express.static(__dirname));
+app.use(express.json({ limit: '12mb' }));
 
 // Validation & Sanitization Helpers
 function isPrivateOrBlockedHost(host) {
   if (!host || typeof host !== 'string') return true;
   const trimmed = host.trim().toLowerCase();
 
-  // Allow loopback/private for development ONLY if explicitly opted-in
-  if (process.env.ALLOW_LOCAL_SMTP === 'true') {
-    return false;
-  }
-
-  // Block obvious localhost / loopback identifiers
-  if (trimmed === 'localhost' || trimmed === '127.0.0.1' || trimmed === '::1' || trimmed === '0.0.0.0') {
+  if (trimmed === 'localhost' || trimmed.endsWith('.localhost') || net.isIP(trimmed) === 6) {
     return true;
   }
 
@@ -60,15 +73,20 @@ function isPrivateOrBlockedHost(host) {
   if (ipv4Match) {
     const [ , a, b, c, d ] = ipv4Match.map(Number);
     if (a > 255 || b > 255 || c > 255 || d > 255) return true;
-    if (a === 10) return true; // 10.0.0.0/8
-    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-    if (a === 192 && b === 168) return true; // 192.168.0.0/16
-    if (a === 127) return true; // loopback
-    if (a === 169 && b === 254) return true; // cloud metadata / APIPA
-    if (a === 0) return true;
+    const address = (((a * 256 + b) * 256 + c) * 256 + d) >>> 0;
+    const blockedRanges = [
+      [0x00000000, 8], [0x0a000000, 8], [0x64400000, 10], [0x7f000000, 8],
+      [0xa9fe0000, 16], [0xac100000, 12], [0xc0000000, 24], [0xc0000200, 24],
+      [0xc0586300, 24], [0xc0a80000, 16], [0xc6120000, 15], [0xc6336400, 24],
+      [0xcb007100, 24], [0xe0000000, 4], [0xf0000000, 4],
+    ];
+    if (blockedRanges.some(([network, prefix]) => {
+      const mask = (0xffffffff << (32 - prefix)) >>> 0;
+      return ((address & mask) >>> 0) === network;
+    })) return true;
   }
 
-  if (trimmed.endsWith('.local') || trimmed.endsWith('.internal') || trimmed.endsWith('.localhost')) {
+  if (trimmed.endsWith('.local') || trimmed.endsWith('.internal')) {
     return true;
   }
 
@@ -91,35 +109,51 @@ function sanitizeFilename(name) {
   return base.slice(0, 80) || 'certificate.png';
 }
 
-function validateSmtpParams(smtp) {
+async function validateSmtpParams(smtp) {
   if (!smtp || typeof smtp !== 'object') {
-    return 'Invalid SMTP configuration object.';
+    return { error: 'Invalid SMTP configuration object.' };
   }
-  if (!smtp.host || typeof smtp.host !== 'string') {
-    return 'SMTP host is required.';
+  if (!smtp.host || typeof smtp.host !== 'string' || smtp.host.trim().length > 253) {
+    return { error: 'A valid SMTP host is required.' };
   }
   if (isPrivateOrBlockedHost(smtp.host)) {
-    return 'Invalid or forbidden SMTP host address (internal or loopback addresses are blocked for security).';
+    return { error: 'Invalid or forbidden SMTP host address.' };
   }
-  const port = parseInt(smtp.port, 10);
-  if (isNaN(port) || port < 1 || port > 65535) {
-    return 'Invalid SMTP port number (must be 1-65535).';
+  const port = Number(smtp.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { error: 'Invalid SMTP port number (must be 1-65535).' };
   }
   if (!smtp.user || typeof smtp.user !== 'string' || !smtp.user.trim()) {
-    return 'SMTP username / email is required.';
+    return { error: 'SMTP username / email is required.' };
   }
-  if (!smtp.pass || typeof smtp.pass !== 'string') {
-    return 'SMTP password is required.';
+  if (smtp.user.length > 254 || !smtp.pass || typeof smtp.pass !== 'string' || smtp.pass.length > 1024) {
+    return { error: 'SMTP username or password is invalid.' };
   }
-  return null;
+
+  try {
+    const ipVersion = net.isIP(smtp.host.trim());
+    const addresses = ipVersion === 4
+      ? [{ address: smtp.host.trim() }]
+      : await dns.lookup(smtp.host.trim(), { all: true, family: 4, verbatim: true });
+    if (!addresses.length || addresses.some(({ address }) => isPrivateOrBlockedHost(address))) {
+      return { error: 'SMTP host resolves to a forbidden or non-public address.' };
+    }
+    return {
+      target: {
+        host: addresses[0].address,
+        servername: ipVersion === 4 ? undefined : smtp.host.trim(),
+      },
+    };
+  } catch (_) {
+    return { error: 'SMTP host could not be resolved to a public IPv4 address.' };
+  }
 }
 
 // Helper to create Nodemailer transport
-function createTransport(smtp) {
-  const port = parseInt(smtp.port, 10) || 587;
-  const allowInvalid = smtp.allowInvalidTls === true;
+function createTransport(smtp, target) {
+  const port = Number(smtp.port);
   return nodemailer.createTransport({
-    host: smtp.host.trim(),
+    host: target.host,
     port,
     secure: port === 465,
     auth: {
@@ -127,8 +161,12 @@ function createTransport(smtp) {
       pass: smtp.pass,
     },
     tls: {
-      rejectUnauthorized: !allowInvalid,
+      rejectUnauthorized: true,
+      ...(target.servername ? { servername: target.servername } : {}),
     },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
   });
 }
 
@@ -136,12 +174,12 @@ function createTransport(smtp) {
 app.post('/api/test-smtp', async (req, res) => {
   try {
     const { smtp } = req.body;
-    const validationError = validateSmtpParams(smtp);
-    if (validationError) {
-      return res.status(400).json({ ok: false, error: validationError });
+    const validation = await validateSmtpParams(smtp);
+    if (validation.error) {
+      return res.status(400).json({ ok: false, error: validation.error });
     }
 
-    const transporter = createTransport(smtp);
+    const transporter = createTransport(smtp, validation.target);
     await transporter.verify();
     return res.json({ ok: true });
   } catch (err) {
@@ -155,25 +193,31 @@ app.post('/api/send-email', async (req, res) => {
   try {
     const { smtp, to, subject, html, attachmentBase64, filename } = req.body;
 
-    const validationError = validateSmtpParams(smtp);
-    if (validationError) {
-      return res.status(400).json({ ok: false, error: validationError });
+    const validation = await validateSmtpParams(smtp);
+    if (validation.error) {
+      return res.status(400).json({ ok: false, error: validation.error });
     }
 
-    if (!to || !isValidEmail(to)) {
+    if (!to || typeof to !== 'string' || to.length > 254 || !isValidEmail(to)) {
       return res.status(400).json({ ok: false, error: 'Valid recipient email address is required.' });
     }
 
-    if (!subject || typeof subject !== 'string') {
+    if (!subject || typeof subject !== 'string' || subject.length > 200) {
       return res.status(400).json({ ok: false, error: 'Subject is required.' });
     }
 
-    if (!html || typeof html !== 'string') {
+    if (!html || typeof html !== 'string' || html.length > 200000) {
       return res.status(400).json({ ok: false, error: 'HTML email body is required.' });
     }
 
-    if (!attachmentBase64 || typeof attachmentBase64 !== 'string') {
+    if (!attachmentBase64 || typeof attachmentBase64 !== 'string' || attachmentBase64.length > 11200000
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(attachmentBase64)) {
       return res.status(400).json({ ok: false, error: 'Attachment base64 data is required.' });
+    }
+
+    const attachment = Buffer.from(attachmentBase64, 'base64');
+    if (attachment.length > 8 * 1024 * 1024 || !attachment.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) {
+      return res.status(400).json({ ok: false, error: 'Attachment must be a PNG file no larger than 8 MB.' });
     }
 
     const cleanSubject = sanitizeHeaderString(subject);
@@ -184,7 +228,7 @@ app.post('/api/send-email', async (req, res) => {
       ? `"${cleanFromName.replace(/"/g, '')}" <${smtp.user.trim()}>`
       : smtp.user.trim();
 
-    const transporter = createTransport(smtp);
+    const transporter = createTransport(smtp, validation.target);
     const mailOptions = {
       from: fromAddress,
       to: to.trim(),
@@ -193,7 +237,7 @@ app.post('/api/send-email', async (req, res) => {
       attachments: [
         {
           filename: cleanFilename,
-          content: Buffer.from(attachmentBase64, 'base64'),
+          content: attachment,
           contentType: 'image/png',
         },
       ],
@@ -207,11 +251,16 @@ app.post('/api/send-email', async (req, res) => {
   }
 });
 
-// Fallback route to serve index.html
-app.get('*', (req, res) => {
+app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`Certificate Generator Backend running on http://localhost:${PORT}`);
+for (const asset of ['index.html', 'app.js', 'style.css', 'image.jpeg']) {
+  app.get(`/${asset}`, (req, res) => res.sendFile(path.join(__dirname, asset)));
+}
+
+app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found.' }));
+
+app.listen(PORT, HOST, () => {
+  console.log(`Certificate Generator Backend running on http://${HOST}:${PORT}`);
 });

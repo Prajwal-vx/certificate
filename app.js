@@ -104,7 +104,6 @@
   const smtpUser        = document.getElementById('smtpUser');
   const smtpPass        = document.getElementById('smtpPass');
   const smtpFromName    = document.getElementById('smtpFromName');
-  const smtpAllowInvalidTls = document.getElementById('smtpAllowInvalidTls');
   const btnSaveSmtp     = document.getElementById('btnSaveSmtp');
   const btnTestSmtp     = document.getElementById('btnTestSmtp');
   const smtpTestResult  = document.getElementById('smtpTestResult');
@@ -132,7 +131,7 @@
   const canvasContainer   = document.getElementById('canvasContainer');
   const canvasHint        = document.getElementById('canvasHint');
 
-  const API_BASE = 'http://localhost:3001';
+  const API_BASE = window.location.origin;
 
   const emailSubject      = document.getElementById('emailSubject');
   const emailBody         = document.getElementById('emailBody');
@@ -497,11 +496,15 @@
 
   // ── Generate certificate blob ──────────────────────────────────────
   function generateCertBlob(rowData, rowIdx = -1) {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       const off = document.createElement('canvas');
       off.width  = state.naturalW;
       off.height = state.naturalH;
       const oc = off.getContext('2d');
+      if (!state.image || !oc || !state.naturalW || !state.naturalH) {
+        reject(new Error('Certificate canvas is not ready.'));
+        return;
+      }
       oc.drawImage(state.image, 0, 0, state.naturalW, state.naturalH);
       for (const baseField of state.fields) {
         const value = rowData[baseField.key] || '';
@@ -509,7 +512,10 @@
         const field = getEffectiveField(baseField, rowIdx);
         drawFieldOnCtx(oc, field, value, field.x * state.naturalW, field.y * state.naturalH);
       }
-      off.toBlob(resolve, 'image/png');
+      off.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Could not render certificate image.'));
+      }, 'image/png');
     });
   }
 
@@ -528,13 +534,17 @@
 
   async function downloadPreview() {
     if (!state.image) { toast('Load a certificate template first', 'warning'); return; }
-    const rowIdx = state.previewRowIdx;
-    const rowData = state.excelData[rowIdx] || {};
-    const blob = await generateCertBlob(rowData, rowIdx);
-    const nameKey = state.excelColumns.find(k => k.includes('name')) || state.excelColumns[0];
-    const label = (nameKey && rowData[nameKey]) ? safeName(rowData[nameKey]) : 'preview';
-    triggerDownload(blob, `${label}_certificate.png`);
-    toast('Preview downloaded!', 'success');
+    try {
+      const rowIdx = state.previewRowIdx;
+      const rowData = state.excelData[rowIdx] || {};
+      const blob = await generateCertBlob(rowData, rowIdx);
+      const nameKey = state.excelColumns.find(k => k.includes('name')) || state.excelColumns[0];
+      const label = (nameKey && rowData[nameKey]) ? safeName(rowData[nameKey]) : 'preview';
+      triggerDownload(blob, `${label}_certificate.png`);
+      toast('Preview downloaded!', 'success');
+    } catch (err) {
+      toast(`Could not generate preview: ${err.message}`, 'warning');
+    }
   }
 
   async function downloadBulk() {
@@ -545,31 +555,34 @@
 
     btnBulk.disabled = true;
     progressWrap.classList.add('visible');
-    const zip = new JSZip();
+    try {
+      const zip = new JSZip();
+      const nameKey = state.excelColumns.find(k => k.includes('name')) || state.excelColumns[0];
 
-    const nameKey = state.excelColumns.find(k => k.includes('name')) || state.excelColumns[0];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const label = (nameKey && row[nameKey]) ? row[nameKey] : `row_${i + 1}`;
+        progressFill.style.width = `${(i / rows.length) * 100}%`;
+        progressLbl.textContent  = `Generating ${i + 1} / ${rows.length}: ${label}`;
+        const blob = await generateCertBlob(row, i);
+        zip.file(`${safeName(label)}_${i + 1}.png`, blob);
+        await new Promise(r => setTimeout(r, 0));
+      }
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const label = (nameKey && row[nameKey]) ? row[nameKey] : `row_${i + 1}`;
-      progressFill.style.width = `${(i / rows.length) * 100}%`;
-      progressLbl.textContent  = `Generating ${i + 1} / ${rows.length}: ${label}`;
-      const blob = await generateCertBlob(row, i);
-      zip.file(`${safeName(label)}_${i + 1}.png`, blob);
-      await new Promise(r => setTimeout(r, 0));
+      progressFill.style.width = '100%';
+      progressLbl.textContent  = 'Compressing…';
+      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+      triggerDownload(zipBlob, 'certificates.zip');
+      toast(`${rows.length} certificate${rows.length !== 1 ? 's' : ''} downloaded!`, 'success');
+    } catch (err) {
+      console.error('Bulk certificate export failed:', err);
+      toast(`Could not generate ZIP: ${err.message}`, 'warning');
+    } finally {
+      progressWrap.classList.remove('visible');
+      progressFill.style.width = '0%';
+      btnBulk.disabled = false;
+      updateBulkBtn();
     }
-
-    progressFill.style.width = '100%';
-    progressLbl.textContent  = 'Compressing…';
-    await new Promise(r => setTimeout(r, 50));
-
-    const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
-    triggerDownload(zipBlob, 'certificates.zip');
-    progressWrap.classList.remove('visible');
-    progressFill.style.width = '0%';
-    btnBulk.disabled = false;
-    updateBulkBtn();
-    toast(`${rows.length} certificate${rows.length !== 1 ? 's' : ''} downloaded!`, 'success');
   }
 
   function triggerDownload(blob, filename) {
@@ -602,6 +615,10 @@
   }
 
   function parseExcelFile(file) {
+    if (file.size > 20 * 1024 * 1024) {
+      toast('Spreadsheet files must be 20 MB or smaller', 'warning');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = e => {
       try {
@@ -667,7 +684,7 @@
 
     if (excelTableBody) {
       excelTableBody.innerHTML = '';
-      for (let i = 0; i < data.length; i++) {
+      for (let i = 0; i < Math.min(data.length, 100); i++) {
         const tr = document.createElement('tr');
         tr.dataset.rowIdx = i;
         tr.innerHTML = `<td>${i + 1}</td>` + displayCols.map(c => `<td>${esc(data[i][c] || '—')}</td>`).join('');
@@ -1098,8 +1115,49 @@
 
   function isSafeUrl(url) {
     if (!url || typeof url !== 'string') return false;
-    const trimmed = url.trim().toLowerCase();
-    return trimmed.startsWith('https://') || trimmed.startsWith('http://') || trimmed.startsWith('mailto:');
+    const trimmed = url.trim();
+    if (!/^(https?:\/\/|mailto:)/i.test(trimmed)) return false;
+    try {
+      return ['https:', 'http:', 'mailto:'].includes(new URL(trimmed).protocol);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function sanitizeEditorHtml(markup) {
+    const parsed = new DOMParser().parseFromString(String(markup || ''), 'text/html');
+    const allowedTags = new Set(['P', 'DIV', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'A', 'UL', 'OL', 'LI', 'BLOCKQUOTE']);
+    const blockedTags = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'SVG', 'MATH', 'VIDEO', 'AUDIO', 'FORM']);
+    const container = document.createElement('div');
+
+    function copySafeNode(source, target) {
+      if (source.nodeType === Node.TEXT_NODE) {
+        target.appendChild(document.createTextNode(source.nodeValue || ''));
+        return;
+      }
+      if (source.nodeType !== Node.ELEMENT_NODE || blockedTags.has(source.tagName)) return;
+      if (!allowedTags.has(source.tagName)) {
+        source.childNodes.forEach(child => copySafeNode(child, target));
+        return;
+      }
+
+      const clean = document.createElement(source.tagName.toLowerCase());
+      if (source.tagName === 'A') {
+        const href = source.getAttribute('href') || '';
+        if (!isSafeUrl(href)) {
+          source.childNodes.forEach(child => copySafeNode(child, target));
+          return;
+        }
+        clean.setAttribute('href', href.trim());
+        clean.setAttribute('target', '_blank');
+        clean.setAttribute('rel', 'noopener noreferrer');
+      }
+      source.childNodes.forEach(child => copySafeNode(child, clean));
+      target.appendChild(clean);
+    }
+
+    parsed.body.childNodes.forEach(node => copySafeNode(node, container));
+    return container.innerHTML;
   }
 
   const btnInsertLink = document.getElementById('btnInsertLink');
@@ -1138,6 +1196,17 @@
 
   if (emailBody) {
     emailBody.addEventListener('input', saveDraft);
+
+    emailBody.addEventListener('paste', e => {
+      e.preventDefault();
+      const pastedHtml = e.clipboardData?.getData('text/html');
+      const pastedText = e.clipboardData?.getData('text/plain') || '';
+      const safeContent = pastedHtml
+        ? sanitizeEditorHtml(pastedHtml)
+        : esc(pastedText).replace(/\r?\n/g, '<br>');
+      document.execCommand('insertHTML', false, safeContent);
+      saveDraft();
+    });
 
     emailBody.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'b') { e.preventDefault(); document.execCommand('bold'); updateToolbarState(); saveDraft(); }
@@ -1197,9 +1266,6 @@
       if (saved.port && smtpPort)         smtpPort.value     = saved.port;
       if (saved.user && smtpUser)         smtpUser.value     = saved.user;
       if (saved.fromName && smtpFromName) smtpFromName.value = saved.fromName;
-      if (smtpAllowInvalidTls && typeof saved.allowInvalidTls === 'boolean') {
-        smtpAllowInvalidTls.checked = saved.allowInvalidTls;
-      }
       updateSmtpBadge(!!saved.host && !!saved.user);
     } catch (_) {}
   }
@@ -1210,7 +1276,6 @@
       port:            smtpPort ? smtpPort.value : 587,
       user:            smtpUser ? smtpUser.value.trim() : '',
       fromName:        smtpFromName ? smtpFromName.value.trim() : '',
-      allowInvalidTls: smtpAllowInvalidTls ? smtpAllowInvalidTls.checked : false,
     };
     localStorage.setItem('certgen_smtp', JSON.stringify(cfg));
     updateSmtpBadge(!!cfg.host && !!cfg.user);
@@ -1275,7 +1340,6 @@
       user:            smtpUser ? smtpUser.value.trim() : '',
       pass:            smtpPass ? smtpPass.value : '',
       fromName:        smtpFromName ? smtpFromName.value.trim() : '',
-      allowInvalidTls: smtpAllowInvalidTls ? smtpAllowInvalidTls.checked : false,
     };
   }
 
@@ -1428,7 +1492,8 @@
     if (!HAS_TAGS.test(raw)) {
       return plainTextToHtml(raw);
     }
-    const s1 = raw.replace(/<\/div>\s*<div>\s*<br\s*\/?>\s*<\/div>\s*<div>/gi, '§P§');
+    const safeHtml = sanitizeEditorHtml(raw);
+    const s1 = safeHtml.replace(/<\/div>\s*<div>\s*<br\s*\/?>\s*<\/div>\s*<div>/gi, '§P§');
     const s2 = s1.replace(/<\/div>\s*<div>/gi, '<br>');
     const s3 = s2.replace(/<\/?div>/gi, '');
     const paragraphs = s3.split('§P§');
@@ -1448,7 +1513,7 @@
         .map(line => `<div>${line === '' ? '<br>' : esc(line)}</div>`)
         .join('');
     }
-    return stored;
+    return sanitizeEditorHtml(stored);
   }
 
   function updateSendBtn() {
@@ -1577,9 +1642,19 @@
   }
 
   function loadCertificateImage(file) {
+    const allowedTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+    if (!allowedTypes.has(file.type) || file.size > 20 * 1024 * 1024) {
+      toast('Choose a PNG, JPG, WebP, or GIF image no larger than 20 MB', 'warning');
+      return;
+    }
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
+      if (img.naturalWidth * img.naturalHeight > 20000000) {
+        URL.revokeObjectURL(url);
+        toast('Certificate images must be 20 megapixels or smaller', 'warning');
+        return;
+      }
       state.image    = img;
       state.naturalW = img.naturalWidth;
       state.naturalH = img.naturalHeight;

@@ -8,7 +8,7 @@ A browser-based tool for generating personalised certificates from a template im
 
 ## Features
 
-- **Drag-and-drop certificate canvas** — upload any PNG/JPG/WebP as your certificate background and visually position text fields on it
+- **Drag-and-drop certificate canvas** — upload a PNG, JPG, WebP, or GIF certificate background and visually position text fields on it
 - **Excel / CSV import** — every column becomes a draggable field; supports `.xlsx`, `.xls`, and `.csv`
 - **Rich typography** — 20+ fonts (handwriting, serif, sans-serif), size, color, bold/italic, alignment, text transform, and drop shadow
 - **Per-row overrides** — click any row in the data table to preview and fine-tune font/position for that specific recipient without affecting others
@@ -40,7 +40,7 @@ npm install
 npm start
 ```
 
-Then open **http://localhost:3001** in your browser.
+Then open [http://127.0.0.1:3001](http://127.0.0.1:3001) in your browser.
 
 ---
 
@@ -48,7 +48,7 @@ Then open **http://localhost:3001** in your browser.
 
 ### 1. Load a Certificate Template
 
-Drag and drop (or click to browse) a PNG, JPG, or WebP image onto the canvas drop zone. This is your blank certificate background.
+Drag and drop (or click to browse) a PNG, JPG, WebP, or GIF image onto the canvas drop zone. This is your blank certificate background.
 
 ### 2. Import Recipient Data
 
@@ -56,10 +56,8 @@ In the **Excel Import** sidebar panel, upload an `.xlsx`, `.xls`, or `.csv` file
 
 **Minimum expected columns:**
 
-| Column | Purpose |
-|--------|---------|
-| `name` (or any column containing "name") | Recipient's full name |
-| `email` (or any column containing "email") | Delivery address for SMTP send |
+- `name` (or any column containing "name"): recipient's full name
+- `email` (or any column containing "email"): delivery address
 
 Any additional columns (e.g. `course`, `date`, `grade`) are also available as fields and email variables.
 
@@ -84,10 +82,8 @@ Click any row in the data preview table to enter **row-edit mode**. While in thi
 
 ### 6. Download
 
-| Button | Output |
-|--------|--------|
-| **Download Preview (1st row)** | Single PNG for the currently previewed row |
-| **Download All as ZIP** | All certificates packed into `certificates.zip` |
+- **Download Preview (1st row):** one PNG for the currently previewed row
+- **Download All as ZIP:** all certificates packed into `certificates.zip`
 
 ### 7. Send by Email (SMTP)
 
@@ -95,13 +91,11 @@ Click any row in the data preview table to enter **row-edit mode**. While in thi
 
 Click **Setup SMTP** and fill in:
 
-| Field | Example |
-|-------|---------|
-| SMTP Host | `smtp.gmail.com` |
-| Port | `587` (TLS) or `465` (SSL) |
-| Username | `you@example.com` |
-| Password / App password | `•••••••` |
-| From Name | `Certificate Team` |
+- SMTP host: `smtp.gmail.com`
+- Port: `587` (TLS) or `465` (SSL)
+- Username: `you@example.com`
+- Password / app password: enter your SMTP credential
+- From name: `Certificate Team`
 
 Click **Test Connection** to verify credentials before saving.
 
@@ -111,7 +105,7 @@ Click **Test Connection** to verify credentials before saving.
 
 Click **Compose Email** to open the rich-text editor. Use `{{variable}}` placeholders that map to your Excel column names:
 
-```
+```text
 Subject: Congratulations, {{firstName}}!
 
 Body:
@@ -143,16 +137,18 @@ Rows without an email address are skipped with a warning.
 
 ## Project Structure
 
-```
+```text
 WiMailer/
+├── app.js            # Client-side editor, certificate rendering, and email workflow
+├── image.jpeg        # Bundled image asset
 ├── index.html        # Single-page UI
-├── server.js         # Express server — SMTP proxy (POST /api/send-email, POST /api/test-smtp)
-├── js/
-│   └── app.js        # All client-side logic
-├── css/
-│   └── style.css     # Dark-theme stylesheet
-└── package.json
+├── package.json      # Node dependencies and start script
+├── read.md           # Project documentation
+├── server.js         # Loopback Express server and SMTP API
+└── style.css         # Application and landing-page styles
 ```
+
+The server listens only on `127.0.0.1`. SMTP hosts must resolve to public IPv4 addresses, TLS certificate verification is always enabled, and email attachments are limited to PNG files of 8 MB or less. Do not expose the server through a reverse proxy or change its network binding without adding authentication and request protections.
 
 ---
 
@@ -162,7 +158,8 @@ WiMailer/
 
 Verifies SMTP credentials without sending a message.
 
-**Body**
+Request body:
+
 ```json
 {
   "smtp": {
@@ -174,7 +171,7 @@ Verifies SMTP credentials without sending a message.
 }
 ```
 
-**Response** `200 { "ok": true }` or `500 { "error": "..." }`
+**Response** `200 { "ok": true }`, `400` for invalid settings, or `500` for connection failures.
 
 ---
 
@@ -182,7 +179,8 @@ Verifies SMTP credentials without sending a message.
 
 Sends one email with a certificate PNG attachment.
 
-**Body**
+Request body:
+
 ```json
 {
   "smtp": { "host": "...", "port": 587, "user": "...", "pass": "...", "fromName": "..." },
@@ -194,34 +192,36 @@ Sends one email with a certificate PNG attachment.
 }
 ```
 
-**Response** `200 { "ok": true }` or `500 { "error": "..." }`
+**Response** `200 { "ok": true }`, `400` for invalid input, or `500` for SMTP delivery failures.
 
 ---
 
 ## Use Cases
 
 ### Graduation / Completion Certificates
+
 Prepare a designed certificate image in Canva or Photoshop, export as PNG, import your student roster (name, email, course), place the name field, and send to hundreds of students in one click.
 
 ### Workshop & Event Attendance
+
 After an event, drop in your attendance sheet, position participant names on the certificate canvas, and email everyone their personalised certificate within minutes.
 
 ### Competition / Award Certificates
+
 Use per-row overrides to adjust font size for participants with unusually long names, keeping every certificate visually consistent without manual editing.
 
 ### Internal HR Recognition
+
 Send personalised "Employee of the Month" or onboarding welcome certificates using your company SMTP relay.
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Vanilla JS, HTML5 Canvas, CSS custom properties |
-| Excel parsing | [SheetJS (xlsx)](https://sheetjs.com/) via CDN |
-| ZIP generation | [JSZip](https://stuk.github.io/jszip/) via CDN |
-| Backend / SMTP proxy | [Node.js](https://nodejs.org/) + [Express](https://expressjs.com/) + [Nodemailer](https://nodemailer.com/) |
+- Frontend: Vanilla JavaScript, HTML5 Canvas, and CSS custom properties
+- Excel parsing: [SheetJS (xlsx)](https://sheetjs.com/) via CDN
+- ZIP generation: [JSZip](https://stuk.github.io/jszip/) via CDN
+- Backend / SMTP proxy: [Node.js](https://nodejs.org/), [Express](https://expressjs.com/), and [Nodemailer](https://nodemailer.com/)
 
 ---
 
